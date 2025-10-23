@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using NATS.Client;
 using System.Text;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,7 +16,15 @@ builder.WebHost.ConfigureKestrel((context, options) =>
 
 // Add services to the container
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    // Treat JsonElement as open object in OpenAPI (so Swagger UI shows it as JSON/object)
+    c.MapType<System.Text.Json.JsonElement>(() => new Microsoft.OpenApi.Models.OpenApiSchema
+    {
+        Type = "object",
+        AdditionalPropertiesAllowed = true
+    });
+});
 
 // Configure NATS connection from configuration
 var natsSection = builder.Configuration.GetSection("Nats");
@@ -41,8 +50,16 @@ app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
     // Read subject from request (if provided) otherwise from configuration
     var subject = request.Subject ?? builder.Configuration.GetValue<string>("Nats:Subject") ?? "microservicio.mensaje";
 
-    // Publish the message as UTF8 and capture result
-    var payload = Encoding.UTF8.GetBytes(request.Message ?? string.Empty);
+    // Serialize the JSON message to UTF8 bytes and capture result
+    byte[] payload;
+    try
+    {
+        payload = JsonSerializer.SerializeToUtf8Bytes(request.Message);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = "Invalid JSON in 'message' field", detail = ex.Message });
+    }
     bool published = false;
     string? error = null;
     try
@@ -56,9 +73,20 @@ app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
         error = ex.Message;
     }
 
+    // Return the same JSON object as 'message' in the response
+    object? responseMessage = null;
+    try
+    {
+        responseMessage = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(request.Message));
+    }
+    catch
+    {
+        responseMessage = null;
+    }
+
     var response = new
     {
-        message = request.Message,
+        message = responseMessage,
         subject = subject,
         published = published,
         error = error
@@ -81,7 +109,8 @@ app.Run();
 
 public class MensajeRequest
 {
-    public string Message { get; set; } = "";
+    // Message is JSON-typed; use JsonElement to accept arbitrary JSON
+    public JsonElement Message { get; set; }
     // Optional subject to override the configured NATS subject
     public string? Subject { get; set; }
 }
