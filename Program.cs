@@ -36,13 +36,13 @@ var app = builder.Build();
 // }
 
 // Define the POST endpoint
-app.MapPost("/api/mensaje", (MensajeRequest request, IConnection nats) =>
+app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
 {
     // Read subject from request (if provided) otherwise from configuration
     var subject = request.Subject ?? builder.Configuration.GetValue<string>("Nats:Subject") ?? "microservicio.mensaje";
 
     // Publish the message as UTF8 and capture result
-    var payload = Encoding.UTF8.GetBytes(request.Mensaje ?? string.Empty);
+    var payload = Encoding.UTF8.GetBytes(request.Message ?? string.Empty);
     bool published = false;
     string? error = null;
     try
@@ -58,7 +58,7 @@ app.MapPost("/api/mensaje", (MensajeRequest request, IConnection nats) =>
 
     var response = new
     {
-        response = request.Mensaje,
+        message = request.Message,
         subject = subject,
         published = published,
         error = error
@@ -81,7 +81,7 @@ app.Run();
 
 public class MensajeRequest
 {
-    public string Mensaje { get; set; } = "";
+    public string Message { get; set; } = "";
     // Optional subject to override the configured NATS subject
     public string? Subject { get; set; }
 }

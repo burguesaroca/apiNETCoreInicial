@@ -1,6 +1,6 @@
 # MicroservicioDemo
 
-Microservicio minimal en ASP.NET Core que expone un endpoint POST `/api/mensaje`.
+Microservicio minimal en ASP.NET Core que expone un endpoint POST `/api/publisher`.
 
 Requisitos
 - .NET SDK instalado (recomendado .NET 8 o 7 según tu SDK).
@@ -19,7 +19,7 @@ dotnet run --project C:\apiNETCoreInicial\MicroservicioDemo.csproj
 
 Probar el endpoint (PowerShell)
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:5005/api/mensaje -Body (@{mensaje="hola mundo"} | ConvertTo-Json) -ContentType "application/json"
+Invoke-RestMethod -Method Post -Uri http://localhost:5005/api/publisher -Body (@{message="testing..."} | ConvertTo-Json) -ContentType "application/json"
 ```
 
 Notas
