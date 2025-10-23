@@ -51,10 +51,27 @@ app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
     var subject = request.Subject ?? builder.Configuration.GetValue<string>("Nats:Subject") ?? "microservicio.mensaje";
 
     // Serialize the JSON message to UTF8 bytes and capture result
+    // Configure serializer options to avoid escaping characters like '<' (so XML strings stay raw)
+    var jsonOptions = new JsonSerializerOptions
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = false
+    };
+
     byte[] payload;
     try
     {
-        payload = JsonSerializer.SerializeToUtf8Bytes(request.Message);
+        if (request.Message.ValueKind == JsonValueKind.String)
+        {
+            // If message is a JSON string (e.g. contains raw XML), publish the raw string bytes
+            var raw = request.Message.GetString() ?? string.Empty;
+            payload = Encoding.UTF8.GetBytes(raw);
+        }
+        else
+        {
+            // Otherwise publish the JSON-serialized bytes using relaxed escaping
+            payload = JsonSerializer.SerializeToUtf8Bytes(request.Message, jsonOptions);
+        }
     }
     catch (Exception ex)
     {
@@ -77,7 +94,9 @@ app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
     object? responseMessage = null;
     try
     {
-        responseMessage = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(request.Message));
+        // Serialize then deserialize using the same relaxed options so the response shows unescaped values
+        var str = JsonSerializer.Serialize(request.Message, jsonOptions);
+        responseMessage = JsonSerializer.Deserialize<JsonElement>(str);
     }
     catch
     {
