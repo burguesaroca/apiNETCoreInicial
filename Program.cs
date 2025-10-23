@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using NATS.Client;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,6 +17,15 @@ builder.WebHost.ConfigureKestrel((context, options) =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Configure NATS connection from configuration
+var natsSection = builder.Configuration.GetSection("Nats");
+var natsUrl = natsSection.GetValue<string>("Url") ?? "nats://localhost:4222";
+var natsOptions = ConnectionFactory.GetDefaultOptions();
+natsOptions.Url = natsUrl;
+var connectionFactory = new ConnectionFactory();
+IConnection natsConnection = connectionFactory.CreateConnection(natsOptions);
+builder.Services.AddSingleton(natsConnection);
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline
@@ -25,13 +36,45 @@ var app = builder.Build();
 // }
 
 // Define the POST endpoint
-app.MapPost("/api/mensaje", (MensajeRequest request) =>
+app.MapPost("/api/mensaje", (MensajeRequest request, IConnection nats) =>
 {
-    var response = new MensajeResponse
+    // Read subject from request (if provided) otherwise from configuration
+    var subject = request.Subject ?? builder.Configuration.GetValue<string>("Nats:Subject") ?? "microservicio.mensaje";
+
+    // Publish the message as UTF8 and capture result
+    var payload = Encoding.UTF8.GetBytes(request.Mensaje ?? string.Empty);
+    bool published = false;
+    string? error = null;
+    try
     {
-        Response = request.Mensaje.ToUpper()
+        nats.Publish(subject, payload);
+        published = true;
+    }
+    catch (Exception ex)
+    {
+        published = false;
+        error = ex.Message;
+    }
+
+    var response = new
+    {
+        response = request.Mensaje,
+        subject = subject,
+        published = published,
+        error = error
     };
     return Results.Ok(response);
+});
+
+// Ensure NATS connection is closed when the app stops
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    try
+    {
+        natsConnection?.Drain();
+        natsConnection?.Close();
+    }
+    catch { }
 });
 
 app.Run();
@@ -39,6 +82,8 @@ app.Run();
 public class MensajeRequest
 {
     public string Mensaje { get; set; } = "";
+    // Optional subject to override the configured NATS subject
+    public string? Subject { get; set; }
 }
 
 public class MensajeResponse

@@ -1,0 +1,3 @@
+CONNECT nats://localhost:4222
+PUBLISH test.nats { "data": "Probando..." }
+SUBSCRIBE test.nats
