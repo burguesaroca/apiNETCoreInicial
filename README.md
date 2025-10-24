@@ -1,4 +1,4 @@
-# MicroservicioDemo
+# MicroserviceNATS
 
 Microservicio minimal en ASP.NET Core que expone un endpoint POST `/api/publisher`.
 
@@ -14,7 +14,7 @@ dotnet build
 Ejecutar
 ```powershell
 # Ejecuta la app (usa la configuración de appsettings.json para el puerto)
-dotnet run --project C:\apiNETCoreInicial\MicroservicioDemo.csproj
+dotnet run --project C:\apiNETCoreInicial\MicroserviceNATS.csproj
 ```
 
 Probar el endpoint (PowerShell)
