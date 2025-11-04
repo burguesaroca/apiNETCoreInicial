@@ -29,20 +29,15 @@ builder.Services.AddSwaggerGen(c =>
 // Configure NATS connection from configuration
 var natsSection = builder.Configuration.GetSection("Nats");
 var natsUrl = natsSection.GetValue<string>("Url") ?? "nats://localhost:4222";
-var natsOptions = ConnectionFactory.GetDefaultOptions();
-natsOptions.Url = natsUrl;
-var connectionFactory = new ConnectionFactory();
-IConnection? natsConnection = null;
-try
-{
-    natsConnection = connectionFactory.CreateConnection(natsOptions);
-    builder.Services.AddSingleton<IConnection>(natsConnection);
-}
-catch (Exception ex)
-{
-    // Do not crash the process if NATS is down; log a console message and continue.
-    Console.WriteLine($"WARNING: Could not connect to NATS at '{natsUrl}'. The application will continue without NATS. Error: {ex.Message}");
-}
+
+// Holder for the IConnection so we can set it when available and allow reconnection attempts.
+builder.Services.AddSingleton<NatsHolder>();
+
+// Background service will try to establish connection periodically when missing.
+builder.Services.AddHostedService<ReconnectNatsService>();
+
+// Note: actual connection attempts happen after the app is built (see below) so the app can
+// start immediately even if NATS is down.
 
 var app = builder.Build();
 
@@ -89,9 +84,11 @@ app.MapPost("/api/publisher", (MensajeRequest request, IServiceProvider sp) =>
     bool published = false;
     string? error = null;
 
-    // Resolve the NATS connection from the service provider. It may be null if the connection
-    // failed at startup (we purposely allow the app to run when NATS is down).
-    var nats = sp.GetService(typeof(IConnection)) as IConnection;
+    // Resolve the NATS holder from the service provider. It may contain null Connection
+    // if the connection hasn't been established yet; the background service will try to
+    // connect while the app is running.
+    var holder = sp.GetService(typeof(NatsHolder)) as NatsHolder;
+    var nats = holder?.GetConnection();
     if (nats == null)
     {
         // NATS not available; return 503 Service Unavailable with a helpful message
@@ -144,10 +141,13 @@ app.Lifetime.ApplicationStopping.Register(() =>
 {
     try
     {
-        if (natsConnection != null)
+        // Attempt to gracefully drain/close the NATS connection if it exists in the holder
+        var holder = app.Services.GetService(typeof(NatsHolder)) as NatsHolder;
+        var existing = holder?.GetConnection();
+        if (existing != null)
         {
-            natsConnection.Drain();
-            natsConnection.Close();
+            existing.Drain();
+            existing.Close();
         }
     }
     catch { }
@@ -166,4 +166,92 @@ public class MensajeRequest
 public class MensajeResponse
 {
     public string Response { get; set; } = "";
+}
+
+// Simple holder for an optional NATS connection so other components can read/update it.
+public class NatsHolder
+{
+    private readonly object _lock = new();
+    private IConnection? _connection;
+
+    public IConnection? GetConnection()
+    {
+        lock (_lock)
+        {
+            return _connection;
+        }
+    }
+
+    public void SetConnection(IConnection connection)
+    {
+        lock (_lock)
+        {
+            _connection = connection;
+        }
+    }
+
+    public void ClearConnection()
+    {
+        lock (_lock)
+        {
+            _connection = null;
+        }
+    }
+}
+
+// Background service that periodically attempts to create a NATS connection when missing.
+public class ReconnectNatsService : Microsoft.Extensions.Hosting.BackgroundService
+{
+    private readonly IConfiguration _config;
+    private readonly NatsHolder _holder;
+    private readonly ILogger<ReconnectNatsService> _logger;
+
+    public ReconnectNatsService(IConfiguration config, NatsHolder holder, ILogger<ReconnectNatsService> logger)
+    {
+        _config = config;
+        _holder = holder;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var natsSection = _config.GetSection("Nats");
+        var natsUrl = natsSection.GetValue<string>("Url") ?? "nats://localhost:4222";
+
+        var factory = new ConnectionFactory();
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (_holder.GetConnection() == null)
+                {
+                    var opts = ConnectionFactory.GetDefaultOptions();
+                    opts.Url = natsUrl;
+                    // Optional: enable reconnects if desired
+                    opts.AllowReconnect = true;
+
+                    _logger.LogInformation("Attempting to connect to NATS at {url}", natsUrl);
+                    var conn = factory.CreateConnection(opts);
+
+                    if (conn != null)
+                    {
+                        _holder.SetConnection(conn);
+                        _logger.LogInformation("Connected to NATS at {url}", natsUrl);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not connect to NATS at {url}. Retrying...", natsUrl);
+            }
+
+            // Wait before next attempt
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+            catch (TaskCanceledException) { }
+        }
+    }
 }
