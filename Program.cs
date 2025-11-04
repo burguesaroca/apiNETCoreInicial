@@ -48,7 +48,7 @@ var app = builder.Build();
 app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
 {
     // Read subject from request (if provided) otherwise from configuration
-    var subject = request.Subject ?? builder.Configuration.GetValue<string>("Nats:Subject") ?? "microservicio.mensaje";
+    var subject = request.Subject ?? builder.Configuration.GetValue<string>("Nats:Subject") ?? "subjectName";
 
     // Serialize the JSON message to UTF8 bytes and capture result
     // Configure serializer options to avoid escaping characters like '<' (so XML strings stay raw)
