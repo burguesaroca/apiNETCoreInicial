@@ -32,8 +32,17 @@ var natsUrl = natsSection.GetValue<string>("Url") ?? "nats://localhost:4222";
 var natsOptions = ConnectionFactory.GetDefaultOptions();
 natsOptions.Url = natsUrl;
 var connectionFactory = new ConnectionFactory();
-IConnection natsConnection = connectionFactory.CreateConnection(natsOptions);
-builder.Services.AddSingleton(natsConnection);
+IConnection? natsConnection = null;
+try
+{
+    natsConnection = connectionFactory.CreateConnection(natsOptions);
+    builder.Services.AddSingleton<IConnection>(natsConnection);
+}
+catch (Exception ex)
+{
+    // Do not crash the process if NATS is down; log a console message and continue.
+    Console.WriteLine($"WARNING: Could not connect to NATS at '{natsUrl}'. The application will continue without NATS. Error: {ex.Message}");
+}
 
 var app = builder.Build();
 
@@ -45,7 +54,7 @@ var app = builder.Build();
 // }
 
 // Define the POST endpoint
-app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
+app.MapPost("/api/publisher", (MensajeRequest request, IServiceProvider sp) =>
 {
     // Read subject from request (if provided) otherwise from configuration
     var subject = request.Subject ?? builder.Configuration.GetValue<string>("Nats:Subject") ?? "subjectName";
@@ -79,6 +88,23 @@ app.MapPost("/api/publisher", (MensajeRequest request, IConnection nats) =>
     }
     bool published = false;
     string? error = null;
+
+    // Resolve the NATS connection from the service provider. It may be null if the connection
+    // failed at startup (we purposely allow the app to run when NATS is down).
+    var nats = sp.GetService(typeof(IConnection)) as IConnection;
+    if (nats == null)
+    {
+        // NATS not available; return 503 Service Unavailable with a helpful message
+        var body = new
+        {
+            message = (object?)null,
+            subject = subject,
+            published = false,
+            error = "NATS connection not available"
+        };
+        return Results.Json(body, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
     try
     {
         nats.Publish(subject, payload);
@@ -118,8 +144,11 @@ app.Lifetime.ApplicationStopping.Register(() =>
 {
     try
     {
-        natsConnection?.Drain();
-        natsConnection?.Close();
+        if (natsConnection != null)
+        {
+            natsConnection.Drain();
+            natsConnection.Close();
+        }
     }
     catch { }
 });
